@@ -98,6 +98,13 @@ if [ -z "$GH_TOKEN_VALUE" ] && command -v gh >/dev/null 2>&1; then
 fi
 [ -n "$GH_TOKEN_VALUE" ] && AUTH_ARGS+=(-e "GH_TOKEN=$GH_TOKEN_VALUE")
 
+# Private npm registry (GitHub Packages): pnpm install authenticates via a token
+# that a project/.npmrc references as ${GITHUB_REGISTRY_ACCESS_TOKEN}. Forward the
+# host's value into the sandbox so the substitution resolves. Only passed when set
+# on the host — never created here.
+[ -n "${GITHUB_REGISTRY_ACCESS_TOKEN:-}" ] && \
+  AUTH_ARGS+=(-e "GITHUB_REGISTRY_ACCESS_TOKEN=$GITHUB_REGISTRY_ACCESS_TOKEN")
+
 # SSH: forward the host agent SOCKET (mounted as a file — dir mounts drop the
 # socket over virtiofs) so signing happens on the host and private keys NEVER
 # enter the sandbox. known_hosts is mounted read-only so host-key verification
