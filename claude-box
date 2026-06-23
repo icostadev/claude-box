@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+# claude-box — run the Claude Code CLI inside an Apple `container` sandbox.
+#
+#   ./claude-box build           Build (or rebuild) the image
+#   ./claude-box                 Run `claude` on the CURRENT directory
+#   ./claude-box <dir>           Run `claude` on <dir> (mounted as /workspace)
+#   ./claude-box [<dir>] <args>  Pass args to claude (e.g. --resume, --model …)
+#   ./claude-box [<dir>] shell   Drop into a bash shell inside the sandbox
+#   ./claude-box stop            Stop the Apple container daemon
+#
+# The target dir defaults to $PWD. If the FIRST argument is an existing
+# directory, it is used instead and dropped from the args given to claude.
+#
+# Mount vs. working dir: if the target is under $HOME/workspace, the WHOLE
+# workspace root is mounted at /workspace (so sibling dirs like repos/ stay
+# reachable) and claude's working dir is set to the target's subpath — this is
+# what lets a project's .claude/agents load while keeping the clones available.
+# A target outside $HOME/workspace is mounted directly at /workspace as before.
+#
+# Auth is DECOUPLED + PERSISTENT: credentials live in $CONFIG_HOME on the host
+# and are bind-mounted in, so you log in once and never again. The host Keychain
+# and any Claude Code agents running outside the container are never touched.
+set -euo pipefail
+
+IMAGE="claude-box:latest"
+SETUP_DIR="$HOME/workspace/claude-box"
+# Persistent, sandbox-only ~/.claude (creds+config), in the macOS app-data dir.
+CONFIG_HOME="$HOME/Library/Application Support/claude-box"
+mkdir -p "$CONFIG_HOME"
+
+# Start the Apple container daemon only if it isn't already up.
+ensure_daemon() {
+  if ! container ls >/dev/null 2>&1; then
+    echo "claude-box: starting Apple container daemon…" >&2
+    container system start
+  fi
+}
+
+# Apple `container` puts the sandbox on a vmnet subnet (192.168.64.0/24) behind
+# bridge100; reaching the internet needs the HOST to forward those packets out
+# en0. A VPN (e.g. AWS Client VPN) zeroes net.inet.ip.forwarding on connect as an
+# anti-IP-leak measure and does NOT restore it on disconnect — so the container
+# silently loses egress (DNS still resolves locally, so it looks like a hang at
+# "Checking connectivity…" / endless API retries). Re-enable it when off. We only
+# touch sudo in the broken case, so the common path stays prompt-free.
+ensure_ip_forwarding() {
+  if [ "$(sysctl -n net.inet.ip.forwarding 2>/dev/null || echo 1)" = "0" ]; then
+    echo "claude-box: host IP forwarding is off (VPN?) — re-enabling for container egress…" >&2
+    sudo sysctl -w net.inet.ip.forwarding=1 >/dev/null
+  fi
+}
+
+# Subcommands that are NOT passed to claude.
+case "${1:-}" in
+  build) ensure_daemon; ensure_ip_forwarding; exec container build -t "$IMAGE" "$SETUP_DIR" ;;
+  stop)  exec container system stop ;;
+esac
+
+# Target dir = current dir, unless the first arg is an existing directory.
+TARGET="$PWD"
+if [ -n "${1:-}" ] && [ -d "$1" ]; then
+  TARGET="$(cd "$1" && pwd -P)"      # resolve to an absolute host path
+  shift
+fi
+
+# Decouple the MOUNT ROOT from the in-container WORKING DIR.
+# The multi-repo workspace root ($HOME/workspace) holds sibling dirs that
+# reference one another — e.g. the ai-control-panel bundle drives the clones in
+# repos/, and only loads its .claude/agents when claude starts *inside* the
+# bundle dir. So if TARGET is anywhere under the workspace root, mount the WHOLE
+# root at /workspace (siblings stay reachable) but set -w to TARGET's subpath
+# (so that project's .claude/agents load). Outside the root, behave as before:
+# mount TARGET itself at /workspace.
+WS_ROOT="$(cd "$HOME/workspace" 2>/dev/null && pwd -P || true)"
+if [ -n "$WS_ROOT" ] && { [ "$TARGET" = "$WS_ROOT" ] || [ "${TARGET#"$WS_ROOT"/}" != "$TARGET" ]; }; then
+  MOUNT_SRC="$WS_ROOT"
+  REL="${TARGET#"$WS_ROOT"}"         # "" when TARGET == root, else "/<subpath>"
+  WORKDIR="/workspace$REL"
+else
+  MOUNT_SRC="$TARGET"
+  WORKDIR="/workspace"
+fi
+
+ensure_daemon
+ensure_ip_forwarding
+
+# --- Auth wiring: reuse the HOST session; nothing is created or copied in -----
+# Collected as extra `container run` flags so the shell + default paths stay DRY.
+AUTH_ARGS=()
+
+# GitHub CLI: the host token lives in the macOS Keychain, which the Linux VM
+# can't read — so a config bind-mount won't carry it. Instead read the EXISTING
+# session token via `gh auth token` (this creates NO new token) and pass it in.
+# An explicitly-exported GH_TOKEN/GITHUB_TOKEN takes precedence.
+GH_TOKEN_VALUE="${GH_TOKEN:-${GITHUB_TOKEN:-}}"
+if [ -z "$GH_TOKEN_VALUE" ] && command -v gh >/dev/null 2>&1; then
+  GH_TOKEN_VALUE="$(gh auth token 2>/dev/null || true)"
+fi
+[ -n "$GH_TOKEN_VALUE" ] && AUTH_ARGS+=(-e "GH_TOKEN=$GH_TOKEN_VALUE")
+
+# SSH: forward the host agent SOCKET (mounted as a file — dir mounts drop the
+# socket over virtiofs) so signing happens on the host and private keys NEVER
+# enter the sandbox. known_hosts is mounted read-only so host-key verification
+# doesn't prompt. No id_* keys are exposed.
+if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "$SSH_AUTH_SOCK" ]; then
+  AUTH_ARGS+=(-v "$SSH_AUTH_SOCK:/ssh-agent.sock" -e "SSH_AUTH_SOCK=/ssh-agent.sock")
+fi
+[ -f "$HOME/.ssh/known_hosts" ] && \
+  AUTH_ARGS+=(-v "$HOME/.ssh/known_hosts:/root/.ssh/known_hosts:ro")
+
+if [ "${1:-}" = "shell" ]; then
+  shift
+  exec container run --rm -it \
+    -m 4G \
+    -v "$CONFIG_HOME:/root/.claude" \
+    ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
+    -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \
+    "$IMAGE" bash "$@"
+fi
+
+exec container run --rm -it \
+  -m 4G \
+  -v "$CONFIG_HOME:/root/.claude" \
+  "${AUTH_ARGS[@]}" \
+  -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \
+  "$IMAGE" "$@"
