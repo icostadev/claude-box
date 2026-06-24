@@ -64,7 +64,22 @@ bind-mounted host workspace, the store:
   copy, and
 - is shared with the host if you ever run pnpm there.
 
-Repos' own `.npmrc` files only add registry/auth, so they don't override this.
+## Private registry auth (GitHub Packages)
+
+`@alteos-gmbh` packages live on `npm.pkg.github.com` and need a token. The runner
+forwards the host's `GITHUB_REGISTRY_ACCESS_TOKEN` into the box, and the **image's
+user-level `/root/.npmrc`** carries the auth line that references it:
+
+```
+//npm.pkg.github.com/:_authToken=${GITHUB_REGISTRY_ACCESS_TOKEN}
+```
+
+This must be at the **user level**, not in a repo's `.npmrc`: pnpm v11 refuses to
+expand `${ENV}` in credentials read from a project (committed) `.npmrc` — it would
+ignore them and emit a warning. The token is resolved at runtime from the
+forwarded env var, so nothing secret is baked into the image. Make sure
+`GITHUB_REGISTRY_ACCESS_TOKEN` is exported in the shell where you launch
+`claude-box`.
 
 ## Requirements
 
