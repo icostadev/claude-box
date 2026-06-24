@@ -36,14 +36,25 @@ RUN corepack enable \
  && corepack prepare pnpm@latest --activate \
  && pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
 
-# --- Shared, persistent pnpm store -------------------------------------------
-# The container is ephemeral (--rm), so a store on the container fs is wiped and
-# re-downloaded every run. Point pnpm at a dir INSIDE the bind-mounted workspace:
-# it sits on the same (virtiofs) filesystem as node_modules — so pnpm can hardlink
-# instead of copy — survives container exit, and is a real host dir the host can
-# share. Set in the global ~/.npmrc so every project inherits it; the repos' own
-# .npmrc files only add registry/auth, never store-dir, so this isn't overridden.
-RUN printf 'store-dir=/workspace/.pnpm-store\n' > /root/.npmrc
+# --- pnpm: persistent shared store + private-registry auth -------------------
+# Two settings, both in the USER-level ~/.npmrc (= a trusted source):
+#
+#  store-dir  — the container is ephemeral (--rm), so a store on the container fs
+#    is wiped and re-downloaded every run. Point pnpm at a dir INSIDE the bind-
+#    mounted workspace: same (virtiofs) filesystem as node_modules (so pnpm can
+#    hardlink instead of copy), survives container exit, and is a real host dir.
+#
+#  _authToken — pnpm REFUSES to expand ${ENV} in credentials read from a project
+#    .npmrc (it's committed, so expanding could leak the token to a hostile
+#    registry). It DOES expand them in a user-level ~/.npmrc. So the auth line
+#    must live here, not in the repo. The literal ${GITHUB_REGISTRY_ACCESS_TOKEN}
+#    is written verbatim (single quotes) and resolved AT RUNTIME from the env var
+#    the runner forwards — no secret is baked into the image.
+RUN printf '%s\n' \
+      'store-dir=/workspace/.pnpm-store' \
+      '@alteos-gmbh:registry=https://npm.pkg.github.com/' \
+      '//npm.pkg.github.com/:_authToken=${GITHUB_REGISTRY_ACCESS_TOKEN}' \
+      > /root/.npmrc
 
 # Keep ALL Claude config + credentials under one dir so a single bind-mount
 # persists the login across container restarts (decoupled from the host).
