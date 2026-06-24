@@ -52,6 +52,20 @@ To keep that prompt-free, install a scoped sudoers rule (validate with
 <you> ALL=(root) NOPASSWD: /usr/sbin/sysctl -w net.inet.ip.forwarding=1
 ```
 
+## pnpm store (persistent + shared)
+
+The container runs with `--rm`, so anything on its own filesystem is lost on exit.
+To avoid re-downloading packages every run, the image sets pnpm's `store-dir` to
+`/workspace/.pnpm-store` (a global `~/.npmrc` setting). Because `/workspace` is the
+bind-mounted host workspace, the store:
+
+- persists across runs as a real host dir (`~/workspace/.pnpm-store`),
+- lives on the same filesystem as `node_modules`, so pnpm can hardlink instead of
+  copy, and
+- is shared with the host if you ever run pnpm there.
+
+Repos' own `.npmrc` files only add registry/auth, so they don't override this.
+
 ## Requirements
 
 macOS 26 + Apple Silicon, the `container` CLI, and Rosetta

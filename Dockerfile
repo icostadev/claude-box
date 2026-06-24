@@ -36,6 +36,15 @@ RUN corepack enable \
  && corepack prepare pnpm@latest --activate \
  && pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
 
+# --- Shared, persistent pnpm store -------------------------------------------
+# The container is ephemeral (--rm), so a store on the container fs is wiped and
+# re-downloaded every run. Point pnpm at a dir INSIDE the bind-mounted workspace:
+# it sits on the same (virtiofs) filesystem as node_modules — so pnpm can hardlink
+# instead of copy — survives container exit, and is a real host dir the host can
+# share. Set in the global ~/.npmrc so every project inherits it; the repos' own
+# .npmrc files only add registry/auth, never store-dir, so this isn't overridden.
+RUN printf 'store-dir=/workspace/.pnpm-store\n' > /root/.npmrc
+
 # Keep ALL Claude config + credentials under one dir so a single bind-mount
 # persists the login across container restarts (decoupled from the host).
 ENV CLAUDE_CONFIG_DIR=/root/.claude
