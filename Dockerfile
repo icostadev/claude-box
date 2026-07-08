@@ -16,6 +16,21 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
+# --- gitleaks (secret scanner) — distributed as a static Go binary -----------
+# Not in Debian repos; pull the release tarball matching the image arch
+# (Apple `container` → linux/arm64, but resolve dynamically so x86 builds work).
+ARG GITLEAKS_VERSION=8.21.2
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+        arm64) gl_arch=arm64 ;; \
+        amd64) gl_arch=x64 ;; \
+        *) echo "unsupported arch" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_${gl_arch}.tar.gz" \
+        | tar -xz -C /usr/local/bin gitleaks; \
+    chmod +x /usr/local/bin/gitleaks; \
+    gitleaks version
+
 # --- Vite+ (VoidZero unified toolchain) manages the Node.js runtime ----------
 # Docker RUN steps don't source shell profiles, so put VP_HOME/bin (where the
 # `vp` binary + node/corepack/pnpm shims live) on PATH explicitly.
