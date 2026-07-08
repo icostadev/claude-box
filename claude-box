@@ -24,6 +24,13 @@ set -euo pipefail
 
 IMAGE="claude-box:latest"
 SETUP_DIR="$HOME/workspace/claude-box"
+
+# VM sizing. Each background agent is another full Claude Code (Node) process
+# plus the tools it spawns, so parallel agent fan-out multiplies memory/CPU use.
+# The old 4G cap let a few concurrent agents exhaust the VM's RAM (no swap → OOM
+# kill, or thrashing) which presents as a freeze. Bumped + overridable via env.
+CLAUDE_BOX_MEM="${CLAUDE_BOX_MEM:-8G}"
+CLAUDE_BOX_CPUS="${CLAUDE_BOX_CPUS:-4}"
 # Persistent, sandbox-only ~/.claude (creds+config), in the macOS app-data dir.
 CONFIG_HOME="$HOME/Library/Application Support/claude-box"
 mkdir -p "$CONFIG_HOME"
@@ -118,7 +125,7 @@ fi
 if [ "${1:-}" = "shell" ]; then
   shift
   exec container run --rm -it \
-    -m 4G \
+    -m "$CLAUDE_BOX_MEM" -c "$CLAUDE_BOX_CPUS" \
     -v "$CONFIG_HOME:/root/.claude" \
     ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
     -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \
@@ -126,7 +133,7 @@ if [ "${1:-}" = "shell" ]; then
 fi
 
 exec container run --rm -it \
-  -m 4G \
+  -m "$CLAUDE_BOX_MEM" -c "$CLAUDE_BOX_CPUS" \
   -v "$CONFIG_HOME:/root/.claude" \
   "${AUTH_ARGS[@]}" \
   -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \

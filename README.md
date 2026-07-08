@@ -26,6 +26,32 @@ If the target dir is under `~/workspace`, the whole workspace root is mounted (s
 sibling repos stay reachable) and claude's working dir is set to the target's
 subpath.
 
+## VM sizing (memory & CPUs)
+
+Apple `container` runs the sandbox in its own lightweight VM. Each **background
+agent** is another full Claude Code (Node) process plus the tools it spawns, so
+parallel agent fan-out multiplies the RAM and CPU the box needs. The old hard
+`-m 4G` cap let a few concurrent agents exhaust the VM's memory — with no swap
+that means an OOM kill (leaving the parent hung on a dead child) or thrashing,
+both of which present as the box **freezing / not responding**.
+
+The runner now defaults to **8 GiB / 4 CPUs** and both are overridable via env
+vars, so heavy multi-agent runs can go higher:
+
+```sh
+CLAUDE_BOX_MEM=16G CLAUDE_BOX_CPUS=8 ./claude-box <dir>
+```
+
+| Env var            | Default | `container run` flag |
+| ------------------ | ------- | -------------------- |
+| `CLAUDE_BOX_MEM`   | `8G`    | `-m` / `--memory`    |
+| `CLAUDE_BOX_CPUS`  | `4`     | `-c` / `--cpus`      |
+
+To confirm memory is the bottleneck during a freeze, watch usage from inside the
+box (`./claude-box shell`, then `watch -n1 'free -m; ps aux --sort=-%mem | head'`)
+— if available memory collapses toward zero as the freeze hits, raise
+`CLAUDE_BOX_MEM`.
+
 ## Auth
 
 Decoupled and persistent: sandbox credentials live on the host at
