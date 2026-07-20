@@ -16,6 +16,13 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
+# --- gh `stack` extension (official; the alteos-gmbh org is enabled for the
+# stacked-PRs preview) — bake it into the trusted image so agents get the CLI
+# without a reactive runtime fetch (which the tool-use classifier blocks). The
+# extension repo is public, so no auth is needed at build time. If a future
+# version gates the repo behind auth, install it at container start instead.
+RUN gh extension install github/gh-stack
+
 # --- gitleaks (secret scanner) — distributed as a static Go binary -----------
 # Not in Debian repos; pull the release tarball matching the image arch
 # (Apple `container` → linux/arm64, but resolve dynamically so x86 builds work).
