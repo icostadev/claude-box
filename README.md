@@ -92,7 +92,8 @@ bind-mounted host workspace, the store:
 
 ## Private registry auth (GitHub Packages)
 
-`@alteos-gmbh` packages live on `npm.pkg.github.com` and need a token. The runner
+Private scoped packages published to GitHub Packages (`npm.pkg.github.com`) need a
+token. The runner
 forwards the host's `GITHUB_REGISTRY_ACCESS_TOKEN` into the box, and the **image's
 user-level `/root/.npmrc`** carries the auth line that references it:
 
@@ -106,6 +107,22 @@ ignore them and emit a warning. The token is resolved at runtime from the
 forwarded env var, so nothing secret is baked into the image. Make sure
 `GITHUB_REGISTRY_ACCESS_TOKEN` is exported in the shell where you launch
 `claude-box`.
+
+### Declaring which scopes are private
+
+The auth line above authenticates *any* scope on GitHub Packages, but which
+`@scope` actually resolves there is deployment-specific, so it is **not** baked
+into the image. List your scopes in `registries.npmrc` in this folder — one per
+line, gitignored so no org name is committed:
+
+```
+@your-scope:registry=https://npm.pkg.github.com/
+```
+
+Copy `registries.npmrc.example` to `registries.npmrc` to start. At build time the
+Dockerfile copies the file in and appends it to the user-level `~/.npmrc`. A fresh
+clone with no `registries.npmrc` still builds (the committed `.example` keeps the
+glob `COPY` from failing) — you just get no private scopes until you add one.
 
 ## Requirements
 

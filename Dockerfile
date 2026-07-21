@@ -16,11 +16,12 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
  && apt-get update && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 
-# --- gh `stack` extension (official; the alteos-gmbh org is enabled for the
-# stacked-PRs preview) — bake it into the trusted image so agents get the CLI
-# without a reactive runtime fetch (which the tool-use classifier blocks). The
-# extension repo is public, so no auth is needed at build time. If a future
-# version gates the repo behind auth, install it at container start instead.
+# --- gh `stack` extension (GitHub's official stacked-PRs preview; the extension
+# repo is public, but actually creating stacks needs your org/account enabled for
+# the preview) — bake it into the trusted image so agents get the CLI without a
+# reactive runtime fetch (which the tool-use classifier blocks). No auth is needed
+# at build time. If a future version gates the repo behind auth, install it at
+# container start instead.
 RUN gh extension install github/gh-stack
 
 # --- gitleaks (secret scanner) — distributed as a static Go binary -----------
@@ -59,7 +60,9 @@ RUN corepack enable \
  && pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
 
 # --- pnpm: persistent shared store + private-registry auth -------------------
-# Two settings, both in the USER-level ~/.npmrc (= a trusted source):
+# Two settings are baked into the USER-level ~/.npmrc (= a trusted source); a
+# third, OPTIONAL piece — which @scopes are private — is deployment-specific and
+# is supplied out-of-band, so NO org/scope name is hardcoded in the image:
 #
 #  store-dir  — the container is ephemeral (--rm), so a store on the container fs
 #    is wiped and re-downloaded every run. Point pnpm at a dir INSIDE the bind-
@@ -71,12 +74,23 @@ RUN corepack enable \
 #    registry). It DOES expand them in a user-level ~/.npmrc. So the auth line
 #    must live here, not in the repo. The literal ${GITHUB_REGISTRY_ACCESS_TOKEN}
 #    is written verbatim (single quotes) and resolved AT RUNTIME from the env var
-#    the runner forwards — no secret is baked into the image.
+#    the runner forwards — no secret is baked into the image. This authenticates
+#    ANY scope's packages on GitHub Packages, so it is registry- not org-specific.
+#
+#  scope→registry mappings — put lines like
+#    `@your-scope:registry=https://npm.pkg.github.com/` in `registries.npmrc`
+#    (gitignored; copy `registries.npmrc.example` to start). The glob COPY never
+#    fails on a fresh clone because the committed .example always matches; only
+#    the real file, if present, is appended to ~/.npmrc.
+COPY registries.npmrc* /tmp/npmrc.d/
 RUN printf '%s\n' \
       'store-dir=/workspace/.pnpm-store' \
-      '@alteos-gmbh:registry=https://npm.pkg.github.com/' \
       '//npm.pkg.github.com/:_authToken=${GITHUB_REGISTRY_ACCESS_TOKEN}' \
-      > /root/.npmrc
+      > /root/.npmrc \
+ && if [ -f /tmp/npmrc.d/registries.npmrc ]; then \
+      cat /tmp/npmrc.d/registries.npmrc >> /root/.npmrc; \
+    fi \
+ && rm -rf /tmp/npmrc.d
 
 # Keep ALL Claude config + credentials under one dir so a single bind-mount
 # persists the login across container restarts (decoupled from the host).
