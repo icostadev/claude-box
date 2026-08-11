@@ -113,13 +113,23 @@ ENV CLAUDE_CONFIG_DIR=/root/.claude
 # inside a session (shift+tab still switches mode for the session at hand).
 COPY settings.json /etc/claude-code/managed-settings.json
 
-# Entrypoint refreshes Claude Code to the latest release on every container
-# START (the build only pins a baseline), then execs the CMD/args. It is
-# best-effort: an offline start falls back to the baked-in version. Skip it with
-# -e CLAUDE_BOX_SKIP_UPDATE=1. It also re-attaches bare runner flags to `claude`
-# (runner args replace CMD), so `shell` and arg passthrough keep working.
+# Entrypoint refreshes Claude Code to the latest release when a container START
+# actually launches `claude` (the build only pins a baseline), then execs the
+# CMD/args. An explicit command — `shell`/bash and friends — skips the refresh
+# and can run `claude-box-update` by hand instead. The refresh is best-effort:
+# an offline start falls back to the version already installed. Skip it for
+# `claude` too with -e CLAUDE_BOX_SKIP_UPDATE=1. The entrypoint also re-attaches
+# bare runner flags to `claude` (runner args replace CMD), so `./claude-box
+# --resume` and arg passthrough keep working.
+COPY update-claude.sh /usr/local/bin/claude-box-update
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/claude-box-update /usr/local/bin/entrypoint.sh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# The runner bind-mounts the host's known_hosts to /root/.ssh/known_hosts; make
+# sure the directory exists with sane perms rather than relying on the mount to
+# create it.
+RUN mkdir -p /root/.ssh && chmod 700 /root/.ssh
 
 # The workspace bind-mount lives at ~/workspace so the host and the container
 # share the same *relative* path: `~/workspace/repos/<x>` resolves identically on
