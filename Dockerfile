@@ -84,7 +84,7 @@ RUN corepack enable \
 #    the real file, if present, is appended to ~/.npmrc.
 COPY registries.npmrc* /tmp/npmrc.d/
 RUN printf '%s\n' \
-      'store-dir=/workspace/.pnpm-store' \
+      'store-dir=/root/workspace/.pnpm-store' \
       '//npm.pkg.github.com/:_authToken=${GITHUB_REGISTRY_ACCESS_TOKEN}' \
       > /root/.npmrc \
  && if [ -f /tmp/npmrc.d/registries.npmrc ]; then \
@@ -96,5 +96,41 @@ RUN printf '%s\n' \
 # persists the login across container restarts (decoupled from the host).
 ENV CLAUDE_CONFIG_DIR=/root/.claude
 
-WORKDIR /workspace
+# --- Baked-in Claude Code settings (starts every session in AUTO mode) --------
+# `settings.json` in this repo is the single source of truth for how Claude Code
+# behaves in the box; it is copied in at BUILD time, so edits need a rebuild.
+#
+# It lands on the POLICY path, not $CLAUDE_CONFIG_DIR, for two reasons:
+#   * /root/.claude is bind-mounted from the host, so a settings file baked in
+#     there would be shadowed at run time — the image cannot seed it.
+#   * Claude Code accepts `defaultMode: "auto"` ONLY from policy, user, or
+#     --settings sources; project/local settings are ignored as repo-controllable.
+# The policy path lives outside every mount, so it applies to `claude` however
+# it starts: the default CMD, runner args, or typed after `./claude-box shell`.
+#
+# Policy settings OVERRIDE the host-side user config, so keep this file to what
+# the box should enforce — anything listed here can no longer be changed from
+# inside a session (shift+tab still switches mode for the session at hand).
+COPY settings.json /etc/claude-code/managed-settings.json
+
+# Entrypoint refreshes Claude Code to the latest release on every container
+# START (the build only pins a baseline), then execs the CMD/args. It is
+# best-effort: an offline start falls back to the baked-in version. Skip it with
+# -e CLAUDE_BOX_SKIP_UPDATE=1. It also re-attaches bare runner flags to `claude`
+# (runner args replace CMD), so `shell` and arg passthrough keep working.
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+# The workspace bind-mount lives at ~/workspace so the host and the container
+# share the same *relative* path: `~/workspace/repos/<x>` resolves identically on
+# both sides, and a path copied from one works in the other.
+#
+# /workspace stays as a compatibility symlink — absolute `/workspace/...` paths
+# are baked into things we cannot rewrite from here: git worktree `gitdir` files
+# in existing clones, agent definitions and slash commands in the control-plane
+# bundle, and Claude Code session history. The symlink keeps both spellings
+# valid, so switching the mount is not a flag day.
+RUN mkdir -p /root/workspace && ln -sfn /root/workspace /workspace
+
+WORKDIR /root/workspace
 CMD ["claude"]

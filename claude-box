@@ -3,7 +3,7 @@
 #
 #   ./claude-box build           Build (or rebuild) the image
 #   ./claude-box                 Run `claude` on the CURRENT directory
-#   ./claude-box <dir>           Run `claude` on <dir> (mounted as /workspace)
+#   ./claude-box <dir>           Run `claude` on <dir> (mounted at ~/workspace)
 #   ./claude-box [<dir>] <args>  Pass args to claude (e.g. --resume, --model …)
 #   ./claude-box [<dir>] shell   Drop into a bash shell inside the sandbox
 #   ./claude-box stop            Stop the Apple container daemon
@@ -12,10 +12,12 @@
 # directory, it is used instead and dropped from the args given to claude.
 #
 # Mount vs. working dir: if the target is under $HOME/workspace, the WHOLE
-# workspace root is mounted at /workspace (so sibling dirs like repos/ stay
+# workspace root is mounted at ~/workspace (so sibling dirs like repos/ stay
 # reachable) and claude's working dir is set to the target's subpath — this is
 # what lets a project's .claude/agents load while keeping the clones available.
-# A target outside $HOME/workspace is mounted directly at /workspace as before.
+# A target outside $HOME/workspace is mounted directly at ~/workspace as before.
+# The mount lands at the SAME path relative to $HOME on both sides; /workspace
+# remains a symlink to it so existing absolute paths keep working.
 #
 # Auth is DECOUPLED + PERSISTENT: credentials live in $CONFIG_HOME on the host
 # and are bind-mounted in, so you log in once and never again. The host Keychain
@@ -71,22 +73,29 @@ if [ -n "${1:-}" ] && [ -d "$1" ]; then
   shift
 fi
 
+# Where the workspace lands INSIDE the container. The container runs as root, so
+# this is ~/workspace on both sides: a path is the same relative to $HOME on the
+# host and in the sandbox, and `~/workspace/repos/<x>` resolves in either.
+# The image also symlinks /workspace -> here, so absolute /workspace/... paths
+# baked into git worktrees, agent definitions and docs keep resolving.
+CONTAINER_WS="/root/workspace"
+
 # Decouple the MOUNT ROOT from the in-container WORKING DIR.
 # The multi-repo workspace root ($HOME/workspace) holds sibling dirs that
 # reference one another — e.g. the ai-control-panel bundle drives the clones in
 # repos/, and only loads its .claude/agents when claude starts *inside* the
 # bundle dir. So if TARGET is anywhere under the workspace root, mount the WHOLE
-# root at /workspace (siblings stay reachable) but set -w to TARGET's subpath
+# root at $CONTAINER_WS (siblings stay reachable) but set -w to TARGET's subpath
 # (so that project's .claude/agents load). Outside the root, behave as before:
-# mount TARGET itself at /workspace.
+# mount TARGET itself at $CONTAINER_WS.
 WS_ROOT="$(cd "$HOME/workspace" 2>/dev/null && pwd -P || true)"
 if [ -n "$WS_ROOT" ] && { [ "$TARGET" = "$WS_ROOT" ] || [ "${TARGET#"$WS_ROOT"/}" != "$TARGET" ]; }; then
   MOUNT_SRC="$WS_ROOT"
   REL="${TARGET#"$WS_ROOT"}"         # "" when TARGET == root, else "/<subpath>"
-  WORKDIR="/workspace$REL"
+  WORKDIR="$CONTAINER_WS$REL"
 else
   MOUNT_SRC="$TARGET"
-  WORKDIR="/workspace"
+  WORKDIR="$CONTAINER_WS"
 fi
 
 ensure_daemon
@@ -123,13 +132,19 @@ fi
 [ -f "$HOME/.ssh/known_hosts" ] && \
   AUTH_ARGS+=(-v "$HOME/.ssh/known_hosts:/root/.ssh/known_hosts:ro")
 
+# Forward the opt-out for the entrypoint's start-time Claude Code refresh, so
+# `CLAUDE_BOX_SKIP_UPDATE=1 ./claude-box …` reaches the container (a fresh env,
+# not the host's). Only passed when set on the host.
+[ -n "${CLAUDE_BOX_SKIP_UPDATE:-}" ] && \
+  AUTH_ARGS+=(-e "CLAUDE_BOX_SKIP_UPDATE=$CLAUDE_BOX_SKIP_UPDATE")
+
 if [ "${1:-}" = "shell" ]; then
   shift
   exec container run --rm -it \
     -m "$CLAUDE_BOX_MEM" -c "$CLAUDE_BOX_CPUS" \
     -v "$CONFIG_HOME:/root/.claude" \
     ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
-    -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \
+    -v "$MOUNT_SRC:$CONTAINER_WS" -w "$WORKDIR" \
     "$IMAGE" bash "$@"
 fi
 
@@ -137,5 +152,5 @@ exec container run --rm -it \
   -m "$CLAUDE_BOX_MEM" -c "$CLAUDE_BOX_CPUS" \
   -v "$CONFIG_HOME:/root/.claude" \
   ${AUTH_ARGS[@]+"${AUTH_ARGS[@]}"} \
-  -v "$MOUNT_SRC:/workspace" -w "$WORKDIR" \
+  -v "$MOUNT_SRC:$CONTAINER_WS" -w "$WORKDIR" \
   "$IMAGE" "$@"

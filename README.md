@@ -8,6 +8,10 @@ reusing your existing host credentials.
 
 - **`Dockerfile`** — the sandbox image (`claude-box:latest`). Debian base, Node via
   Vite+ (VoidZero), pnpm v11 via corepack.
+- **`entrypoint.sh`** — container entrypoint; refreshes Claude Code to the latest
+  release on every start (see [Keeping Claude Code updated](#keeping-claude-code-updated)).
+- **`settings.json`** — Claude Code settings baked into the image at build time
+  (see [Baked-in settings](#baked-in-settings-settingsjson)).
 - **`claude-box`** — the runner script. Starts the Apple `container` daemon if
   needed, mounts your workspace, wires auth, and launches `claude`.
 
@@ -25,6 +29,53 @@ reusing your existing host credentials.
 If the target dir is under `~/workspace`, the whole workspace root is mounted (so
 sibling repos stay reachable) and claude's working dir is set to the target's
 subpath.
+
+## Baked-in settings (`settings.json`)
+
+`settings.json` in this repo is the Claude Code config for the box. It is copied
+into the image at build time, so **edits take effect on the next
+`./claude-box build`** — nothing to configure on the host.
+
+It currently just starts every session in **auto** permission mode; the box is
+already a sandbox, so the per-tool prompts buy nothing:
+
+```json
+{ "permissions": { "defaultMode": "auto" } }
+```
+
+The file is copied to `/etc/claude-code/managed-settings.json` rather than into
+`$CLAUDE_CONFIG_DIR`, for two reasons: `/root/.claude` is bind-mounted from the
+host, so an image-baked file there is shadowed at run time; and Claude Code
+honours `defaultMode: "auto"` only from **policy**, **user**, or `--settings`
+sources — project/local settings are ignored as repo-controllable. The policy
+path sits outside every mount, so it applies however `claude` starts, including
+by hand after `./claude-box shell`.
+
+> Because it is the policy layer, it wins over the host-side user config in
+> `~/Library/Application Support/claude-box` — which is what makes this repo the
+> single source of truth, but also means anything you add here can no longer be
+> changed from inside a session. Keep it to what the box should enforce.
+> (shift+tab still switches mode for the session at hand.)
+
+## Keeping Claude Code updated
+
+The image bakes in a pinned Claude Code at **build** time, so it would otherwise
+only move forward when you `./claude-box build`. To stay current, `entrypoint.sh`
+runs `pnpm add -g @anthropic-ai/claude-code@latest` on every container **start**,
+then hands off to `claude` (or `shell`). The pnpm store on the workspace
+bind-mount caches the download, so repeat starts are fast when already current.
+
+The refresh is **best-effort and non-fatal**: it needs network egress, and the
+box is often launched offline or behind a VPN that has dropped egress (see the
+[networking note](#networking-note-vpn-gotcha)). If the update can't run it prints
+a warning and falls back to the version baked into the image.
+
+```sh
+CLAUDE_BOX_SKIP_UPDATE=1 ./claude-box <dir>   # skip the refresh (fast offline start)
+```
+
+> Because this changes the image, run `./claude-box build` once to pick up the
+> entrypoint; every start after that self-updates.
 
 ## VM sizing (memory & CPUs)
 
