@@ -41,22 +41,34 @@ RUN set -eux; \
 
 # --- Vite+ (VoidZero unified toolchain) manages the Node.js runtime ----------
 # Docker RUN steps don't source shell profiles, so put VP_HOME/bin (where the
-# `vp` binary + node/corepack/pnpm shims live) on PATH explicitly.
+# `vp` binary + its node/npm/pnpm shims live) on PATH explicitly.
 ENV VP_HOME=/root/.vite-plus
 ENV PATH=$VP_HOME/bin:$PATH
 RUN curl -fsSL https://vite.plus | bash
 
 # Vite+ manages Node by default and auto-installs the latest LTS on first use of
-# its shims (node/corepack), so no explicit `vp env install` step is needed.
+# its shims (node/npm), so no explicit `vp env install` step is needed.
 
-# --- pnpm via corepack, then Claude Code -------------------------------------
-# pnpm global installs land in PNPM_HOME; put it on PATH so `claude` resolves.
+# --- pnpm (provided by Vite+, no corepack), then Claude Code -----------------
+# Vite+ ships pnpm itself: VP_HOME/bin/pnpm is a shim to `vp`, which downloads
+# and runs pnpm on first use. Corepack is not involved (Node 25+ drops it anyway).
+# pnpm's global installs land in PNPM_HOME; put it on PATH so `claude` resolves.
 ENV PNPM_HOME=/root/.local/share/pnpm
 ENV PATH=$PNPM_HOME/bin:$PATH
-# pnpm v11 blocks dependency build scripts by default; --allow-build lets
+# pnpm v11+ also refuses any version published less than a day ago
+# (`minimumReleaseAge`), and silently resolves `@latest` to an older release
+# instead. Exempt Claude Code alone, so the box runs the current release while
+# every other package keeps the delay. pnpm 12 reads this from its global
+# config.yaml, NOT from ~/.npmrc (an npmrc entry is ignored there).
+RUN mkdir -p /root/.config/pnpm \
+ && printf '%s\n' \
+      'minimumReleaseAgeExclude:' \
+      '  - "@anthropic-ai/claude-code"' \
+      '  - "@anthropic-ai/claude-code-*"' \
+      > /root/.config/pnpm/config.yaml
+# pnpm v11+ blocks dependency build scripts by default; --allow-build lets
 # claude-code run its postinstall (which downloads the platform-native binary).
-RUN corepack enable \
- && corepack prepare pnpm@latest --activate \
+RUN pnpm --version \
  && pnpm add -g --allow-build=@anthropic-ai/claude-code @anthropic-ai/claude-code
 
 # --- pnpm: persistent shared store + private-registry auth -------------------

@@ -1,7 +1,7 @@
 # claude-box — project instructions
 
 `claude-box` builds and runs the **Claude Code CLI sandbox image** (Debian base +
-`gh` + the `gh-stack` extension + gitleaks + Vite+/Node + pnpm + Claude Code), run
+`gh` + the `gh-stack` extension + gitleaks + Vite+/Node + pnpm (from Vite+, no corepack) + Claude Code), run
 under Apple `container`. The image is defined in `Dockerfile` and launched by the
 `claude-box` runner script; see `README.md` for usage.
 

@@ -9,7 +9,7 @@ reusing your existing host credentials.
 - **`Dockerfile`** — the sandbox image (`claude-box:latest`). Debian base plus
   `git`, `curl`, `ripgrep`, `jq`, `less`, `openssh-client`, the GitHub CLI (`gh`)
   with the **`gh-stack`** extension, **gitleaks**, Node via **Vite+** (VoidZero),
-  pnpm via corepack, and Claude Code.
+  pnpm provided by Vite+ (no corepack), and Claude Code.
 - **`entrypoint.sh`** — container entrypoint; decides what to run and refreshes
   Claude Code first when that is `claude` (see
   [Keeping Claude Code updated](#keeping-claude-code-updated)).
