@@ -2,9 +2,11 @@
 # Node is provided by Vite+ (VoidZero), NOT the base image. Build: ./claude-box build
 FROM docker.io/library/debian:bookworm-slim
 
-# Base tools (no node here — Vite+ installs it)
+# Base tools (no node here — Vite+ installs it). python3 + pre-commit run the git
+# hooks repos like end-2-end install; without them every commit there aborts.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git ca-certificates curl bash ripgrep less jq openssh-client gnupg \
+        python3 pre-commit \
     && rm -rf /var/lib/apt/lists/*
 
 # --- GitHub CLI (`gh`) — not in Debian repos, so add its official apt source --
