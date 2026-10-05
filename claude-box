@@ -6,6 +6,7 @@
 #   ./claude-box <dir>           Run `claude` on <dir> (mounted at ~/workspace)
 #   ./claude-box [<dir>] <args>  Pass args to claude (e.g. --resume, --model …)
 #   ./claude-box [<dir>] shell   Drop into a bash shell inside the sandbox
+#   ./claude-box [<dir>] --dispatcher   Run the OKF control plane in DISPATCHER mode
 #   ./claude-box stop            Stop the Apple container daemon
 #
 # The target dir defaults to $PWD. If the FIRST argument is an existing
@@ -32,7 +33,7 @@ SETUP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 # plus the tools it spawns, so parallel agent fan-out multiplies memory/CPU use.
 # The old 4G cap let a few concurrent agents exhaust the VM's RAM (no swap → OOM
 # kill, or thrashing) which presents as a freeze. Bumped + overridable via env.
-CLAUDE_BOX_MEM="${CLAUDE_BOX_MEM:-8G}"
+CLAUDE_BOX_MEM="${CLAUDE_BOX_MEM:-16G}"
 CLAUDE_BOX_CPUS="${CLAUDE_BOX_CPUS:-4}"
 # Persistent, sandbox-only ~/.claude (creds+config), in the macOS app-data dir.
 CONFIG_HOME="$HOME/Library/Application Support/claude-box"
@@ -59,6 +60,27 @@ ensure_ip_forwarding() {
     sudo sysctl -w net.inet.ip.forwarding=1 >/dev/null
   fi
 }
+
+# --- OKF session mode ---------------------------------------------------------
+# The ai-control-panel bundle runs as either a DISPATCHER (drains the ready queue
+# and spawns engineers into product repos) or a PLANNER (everything else). Its
+# PreToolUse hook reads OKF_SESSION_MODE from the environment and FAILS CLOSED:
+# anything but `dispatcher` is a planner. The var therefore has to reach the
+# CONTAINER — and `OKF_SESSION_MODE=dispatcher ./claude-box <dir>` sets it only on
+# the HOST, where nothing reads it, so the box comes up a planner and the tick
+# refuses to run with no hint as to why. `--dispatcher` is the explicit form; an
+# exported OKF_SESSION_MODE is still honoured. Stripped from the args here so it
+# never reaches claude — the entrypoint re-attaches a leading-dash arg to
+# `claude`, so an unconsumed flag would die as an unknown claude option.
+OKF_MODE="${OKF_SESSION_MODE:-}"
+OKF_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    --dispatcher) OKF_MODE="dispatcher" ;;
+    *)            OKF_ARGS+=("$arg") ;;
+  esac
+done
+set -- ${OKF_ARGS[@]+"${OKF_ARGS[@]}"}
 
 # Subcommands that are NOT passed to claude.
 case "${1:-}" in
@@ -137,6 +159,22 @@ fi
 # not the host's). Only passed when set on the host.
 [ -n "${CLAUDE_BOX_SKIP_UPDATE:-}" ] && \
   AUTH_ARGS+=(-e "CLAUDE_BOX_SKIP_UPDATE=$CLAUDE_BOX_SKIP_UPDATE")
+
+# OKF session mode (see the block near the top). Passed ONLY when it resolves to
+# exactly `dispatcher`, so an unset value or a typo lands as a planner rather than
+# licensing a second dispatcher — two dispatchers is what produced duplicate PRs.
+[ "$OKF_MODE" = "dispatcher" ] && \
+  AUTH_ARGS+=(-e "OKF_SESSION_MODE=dispatcher")
+
+# The env var alone makes a dispatcher that the hooks accept, but the bundle's
+# dispatcher.settings.json is what selects its model and its okf-dispatcher output
+# style, and claude only reads it via --settings. Appended only when the command is
+# claude (no args, a leading-dash arg, or `claude`), never to `shell` or `bash`.
+DISPATCHER_SETTINGS=".claude/dispatcher.settings.json"
+if [ "$OKF_MODE" = "dispatcher" ] && [ -f "$TARGET/$DISPATCHER_SETTINGS" ] && \
+   { [ "$#" -eq 0 ] || [ "${1#-}" != "$1" ] || [ "$1" = "claude" ]; }; then
+  set -- "$@" --settings "$WORKDIR/$DISPATCHER_SETTINGS"
+fi
 
 if [ "${1:-}" = "shell" ]; then
   shift

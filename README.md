@@ -30,8 +30,47 @@ reusing your existing host credentials.
 ./claude-box <dir>           # run claude on <dir>
 ./claude-box [<dir>] <args>  # pass args to claude (e.g. --resume, --model …)
 ./claude-box [<dir>] shell   # drop into a bash shell inside the sandbox
+./claude-box [<dir>] --dispatcher  # run the OKF control plane as a DISPATCHER
 ./claude-box stop            # stop the Apple container daemon
 ```
+
+## OKF session mode (`--dispatcher`)
+
+The `ai-control-panel` bundle runs a session as one of two roles, and its
+`PreToolUse` hook decides which by reading **`OKF_SESSION_MODE`** from the
+environment:
+
+- **planner** (the default) — reviews, refines and promotes tasks. Cannot start
+  work: `/okf-tick`, `/pr-watch`, `/pm-tick`, `/dispatch` and `/loop` are blocked,
+  as is spawning an `engineer` into a product repo.
+- **dispatcher** — drains the ready queue and spawns engineers.
+
+The hook **fails closed**: unset, empty or unrecognised is a planner. That only
+works if the value actually reaches the *container*, and
+
+```sh
+OKF_SESSION_MODE=dispatcher ./claude-box <dir>   # ← sets it on the HOST only
+```
+
+does not — the runner forwards a fixed list of vars, so the box comes up a planner
+and `/okf-tick` refuses to run without saying why. Use the flag:
+
+```sh
+./claude-box ~/workspace/ai-control-panel --dispatcher   # then /okf-start
+```
+
+It may go before or after `<dir>`, combines with `shell` and with claude's own
+args, and is stripped before the rest reach `claude`. When `<dir>` has a
+`.claude/dispatcher.settings.json`, the runner also passes it to `claude` as
+`--settings`, which selects the dispatcher's model (Sonnet) and its
+`okf-dispatcher` output style. Without it the box would be a dispatcher running
+on your default model. An exported
+`OKF_SESSION_MODE=dispatcher` is still honoured. Only the exact value
+`dispatcher` is forwarded, so a typo degrades to a planner rather than quietly
+licensing a second dispatcher — two at once is what produced duplicate PRs.
+
+Run it in its **own terminal**: the planner session is the one you talk to, and
+the loop's output is why the two are kept apart.
 
 ## Where the workspace lands
 
